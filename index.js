@@ -1,10 +1,8 @@
+require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const bodyParser = require("body-parser");
 const uuid = require("uuid");
-const fs = require("fs");
-const path = require("path");
-const jsQR = require("jsqr");
 const Jimp = require("jimp");
 const QrCode = require("qrcode-reader");
 
@@ -13,16 +11,27 @@ const PORT = 3000;
 
 app.use(bodyParser.json());
 
+const CASHFREE_API_ENDPOINT = "https://sandbox.cashfree.com/pg";
+const API_VERSION = "2023-08-01";
+const PARTNER_MERCHANT_ID = "sanskar123";
+const API_KEY = process.env.CASHFREE_API_KEY; // Store API key in .env file
+
+const generateHeaders = (extraHeaders = {}) => ({
+  "Content-Type": "application/json",
+  "x-partner-apikey": API_KEY,
+  "x-api-version": API_VERSION,
+  "x-partner-merchantid": PARTNER_MERCHANT_ID,
+  ...extraHeaders,
+});
+
+// Extract QR code data
 async function fetchDataFromQr(base64Image) {
   try {
-    // Remove the metadata prefix from the base64 string
     const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, "");
     const buffer = Buffer.from(base64Data, "base64");
 
-    // Read the image from buffer
     const img = await Jimp.read(buffer);
 
-    // Wrap the QR decoding in a promise
     return await new Promise((resolve, reject) => {
       const qr = new QrCode();
       qr.callback = (error, result) => {
@@ -39,17 +48,26 @@ async function fetchDataFromQr(base64Image) {
           console.log("No QR code found.");
           return reject("No QR code found");
         }
+        return resolve(result.result);
       };
-
       qr.decode(img.bitmap);
     });
   } catch (err) {
     console.error("Error reading image:", err);
-    throw err; // Re-throw the error so it can be handled by the caller
+    throw err;
   }
 }
 
-//Transaction Level APIs:
+// Error handling function
+const handleError = (res, error, message) => {
+  console.error(message, error.response?.data || error.message);
+  res.status(500).json({
+    message,
+    error: error.response?.data || error.message,
+  });
+};
+
+// Transaction Level APIs:
 app.post("/create-order", async (req, res) => {
   const {
     order_id,
@@ -64,17 +82,11 @@ app.post("/create-order", async (req, res) => {
     cart_details,
   } = req.body;
 
-  // Replace with your actual API endpoint and key
-  const apiEndpoint = "https://sandbox.cashfree.com/pg/orders";
-  const apiKey = "CYjPFSLzKTp42b3e7f4206234e1306c0deb21d1a0927e7be8123"; // Use your actual API key
-  const apiVersion = "2023-08-01"; // Required header
-
-  // Create request payload
   const data = {
     order_id,
     order_amount,
     order_currency,
-    customer_details, // Required, even if dummy details
+    customer_details,
     order_meta,
     order_expiry_time,
     order_note,
@@ -84,184 +96,107 @@ app.post("/create-order", async (req, res) => {
   };
 
   try {
-    // Make API call to Cashfree's create order endpoint
-    const response = await axios.post(apiEndpoint, data, {
-      headers: {
-        "Content-Type": "application/json",
-        "x-partner-apikey": apiKey,
-        "x-api-version": apiVersion,
-        "x-request-id": uuid.v4(), // Unique request ID for tracking
-        "x-idempotency-key": uuid.v4(), // Unique key for retrying without duplicate actions
-        "x-partner-merchantid": "sanskar123",
-      },
+    const response = await axios.post(`${CASHFREE_API_ENDPOINT}/orders`, data, {
+      headers: generateHeaders({
+        "x-request-id": uuid.v4(),
+        "x-idempotency-key": uuid.v4(),
+      }),
     });
 
-    // Send response to client
     res.status(200).json({
       message: "Order created successfully",
       data: response.data,
     });
   } catch (error) {
-    console.error(
-      "Error creating order:",
-      error.response?.data || error.message
-    );
-    res.status(500).json({
-      message: "Failed to create order",
-      error: error.response?.data || error.message,
-    });
+    handleError(res, error, "Failed to create order");
   }
 });
 
 app.get("/get-order", async (req, res) => {
   const orderId = req.query.order_id;
-  const apiEndpoint = `https://sandbox.cashfree.com/pg/orders/${orderId}`;
-  const apiKey = "CYjPFSLzKTp42b3e7f4206234e1306c0deb21d1a0927e7be8123"; // Use your actual API key
-  const apiVersion = "2023-08-01"; // Required header
-  const merchantid = "sanskar123";
-  const headers = {
-    "Content-Type": "application/json",
-    "x-partner-apikey": apiKey,
-    "x-api-version": apiVersion,
-    "x-partner-merchantid": merchantid,
-  };
 
   try {
-    const response = await axios.get(apiEndpoint, { headers });
+    const response = await axios.get(
+      `${CASHFREE_API_ENDPOINT}/orders/${orderId}`,
+      {
+        headers: generateHeaders(),
+      }
+    );
 
     res.status(200).json({
       message: "Order fetched successfully",
       data: response.data,
     });
   } catch (error) {
-    console.error(
-      "Error fetching order:",
-      error.response?.data || error.message
-    );
-    res.status(500).json({
-      message: "Failed to fetch order",
-      error: error.response?.data || error.message,
-    });
+    handleError(res, error, "Failed to fetch order");
   }
 });
 
 app.patch("/terminate-order", async (req, res) => {
   const orderId = req.query.order_id;
-  const apiEndpoint = `https://sandbox.cashfree.com/pg/orders/${orderId}`;
-  const apiKey = "CYjPFSLzKTp42b3e7f4206234e1306c0deb21d1a0927e7be8123";
-  const merchantid = "sanskar123";
-  const apiVersion = "2023-08-01";
-
   const status = req.body.status;
-
-  const headers = {
-    "Content-Type": "application/json",
-    "x-partner-apikey": apiKey,
-    "x-api-version": apiVersion,
-    "x-partner-merchantid": merchantid,
-  };
 
   try {
     const response = await axios.patch(
-      apiEndpoint,
+      `${CASHFREE_API_ENDPOINT}/orders/${orderId}`,
       { order_status: status },
-      { headers }
+      { headers: generateHeaders() }
     );
-
-    console.log("Order terminated successfully:", response);
 
     res.status(200).json({
       message: "Order terminated successfully",
       data: response.data,
     });
   } catch (error) {
-    console.error(
-      "Error terminating order:",
-      error.response?.data || error.message
-    );
-    res.status(500).json({
-      message: "Failed to terminate order",
-      error: error.response?.data || error.message,
-    });
+    handleError(res, error, "Failed to terminate order");
   }
 });
 
 app.get("/extended-details", async (req, res) => {
   const order_id = req.query.order_id;
-  const apiEndpoint = `https://sandbox.cashfree.com/pg/orders/${order_id}/extended`;
-  const apiKey = "CYjPFSLzKTp42b3e7f4206234e1306c0deb21d1a0927e7be8123";
-  const merchantid = "sanskar123";
-  const apiVersion = "2023-08-01";
-
-  const headers = {
-    "Content-Type": "application/json",
-    "x-partner-apikey": apiKey,
-    "x-api-version": apiVersion,
-    "x-partner-merchantid": merchantid,
-  };
 
   try {
-    const response = await axios.get(apiEndpoint, {
-      headers,
-    });
+    const response = await axios.get(
+      `${CASHFREE_API_ENDPOINT}/orders/${order_id}/extended`,
+      {
+        headers: generateHeaders(),
+      }
+    );
 
     res.status(200).json({
       message: "Order details fetched successfully",
       data: response.data,
     });
   } catch (error) {
-    console.error(
-      "Error fetching order details:",
-      error.response?.data || error.message
-    );
-    res.status(500).json({
-      message: "Failed to fetch order details",
-      error: error.response?.data || error.message,
-    });
+    handleError(res, error, "Failed to fetch order details");
   }
 });
 
 app.post("/order-payment", async (req, res) => {
-  const apiVersion = "2023-08-01";
-
-  const headers = {
-    "Content-Type": "application/json",
-    "x-api-version": apiVersion,
-  };
-
   const payment_session_id = req.body.payment_session_id;
-
-  console.log("Payment session ID:", payment_session_id);
 
   const body = {
     payment_method: {
-      card: {
-        channel: "link",
-      },
-      upi: {
-        channel: "link", //change this to "qrcode" for UPI QR code
-      },
+      card: { channel: "link" },
+      upi: { channel: "link" },
     },
     payment_session_id,
   };
 
-  console.log("Payment body:", body);
-
   try {
     const response = await axios.post(
-      "https://sandbox.cashfree.com/pg/orders/sessions",
+      `${CASHFREE_API_ENDPOINT}/orders/sessions`,
       body,
-      { headers }
+      { headers: generateHeaders() }
     );
 
     const responseData = response.data;
 
     if (responseData?.data?.payload?.qrcode) {
-      // Use the base64 qrcode directly as imageUrl
       const base64Image = responseData.data.payload.qrcode;
       try {
         const decodedData = await fetchDataFromQr(base64Image);
-        responseData.data.payload.imageUrl = decodedData; // Add decoded data to the response
+        responseData.data.payload.imageUrl = decodedData;
       } catch (err) {
         console.error("Error fetching data from QR code:", err);
         responseData.data.payload.imageUrl = "QR decoding failed";
@@ -273,14 +208,45 @@ app.post("/order-payment", async (req, res) => {
       data: responseData,
     });
   } catch (error) {
-    console.error(
-      "Error initiating payment:",
-      error.response?.data || error.message
+    handleError(res, error, "Failed to initiate payment");
+  }
+});
+
+app.get("/all-payment-status", async (req, res) => {
+  const order_id = req.query.order_id;
+
+  try {
+    const response = await axios.get(
+      `${CASHFREE_API_ENDPOINT}/orders/${order_id}/payments`,
+      {
+        headers: generateHeaders(),
+      }
     );
-    res.status(500).json({
-      message: "Failed to initiate payment",
-      error: error.response?.data || error.message,
+
+    res.status(200).json({
+      message: "Payment status fetched successfully",
+      data: response.data,
     });
+  } catch (error) {
+    handleError(res, error, "Failed to fetch payment status");
+  }
+});
+
+app.get("/payment-status", async (req, res) => {
+  const { payment_id, order_id } = req.query;
+
+  try {
+    const response = await axios.get(
+      `${CASHFREE_API_ENDPOINT}/orders/${order_id}/payments/${payment_id}`,
+      { headers: generateHeaders() }
+    );
+
+    res.status(200).json({
+      message: "Payment status fetched successfully",
+      data: response.data,
+    });
+  } catch (error) {
+    handleError(res, error, "Failed to fetch payment status");
   }
 });
 
