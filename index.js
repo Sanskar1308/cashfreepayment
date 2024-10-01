@@ -178,7 +178,7 @@ app.post("/order-payment", async (req, res) => {
   const body = {
     payment_method: {
       card: { channel: "link" },
-      upi: { channel: "link" },
+      upi: { channel: "link" }, //change this to "qrcode" or "collect" for other methods
     },
     payment_session_id,
   };
@@ -247,6 +247,95 @@ app.get("/payment-status", async (req, res) => {
     });
   } catch (error) {
     handleError(res, error, "Failed to fetch payment status");
+  }
+});
+
+app.post("/create-refund", async (req, res) => {
+  const order_id = req.query.order_id; // required
+  const refund_amount = req.body.refund_amount; // required
+  const refund_id = req.body.refund_id; // should be between 3-40 characters, required
+  const refund_note = req.body.refund_note; // should be between 3-40 characters
+  const refund_speed = req.body.refund_speed; // STANDARD or INSTANT
+  const vendor_id = req.body.vendor_id;
+  const amount = req.body.vendor_amount;
+  const percentage = req.body.vendor_percentage;
+  const tags = req.body.tags;
+
+  // Start building the body with required fields
+  const body = {
+    refund_amount,
+    refund_id,
+  };
+
+  // Add optional fields only if they are provided
+  if (refund_note) {
+    body.refund_note = refund_note;
+  }
+
+  if (refund_speed) {
+    body.refund_speed = refund_speed;
+  }
+
+  if (vendor_id || amount || percentage || tags) {
+    body.refund_splits = [
+      {
+        ...(vendor_id && { vendor_id }),
+        ...(amount && { amount }),
+        ...(percentage && { percentage }),
+        ...(tags && { tags }),
+      },
+    ];
+  }
+
+  try {
+    const response = await axios.post(
+      `${CASHFREE_API_ENDPOINT}/orders/${order_id}/refunds`,
+      body,
+      { headers: generateHeaders() }
+    );
+
+    res.status(200).json({
+      message: "Refund initiated successfully",
+      data: response.data,
+    });
+  } catch (error) {
+    handleError(res, error, "Failed to initiate refund");
+  }
+});
+
+app.get("/all-refunds", async (req, res) => {
+  const order_id = req.query.order_id;
+
+  try {
+    const response = await axios.get(
+      `${CASHFREE_API_ENDPOINT}/orders/${order_id}/refunds`,
+      { headers: generateHeaders() }
+    );
+
+    res.status(200).json({
+      message: "Refunds fetched successfully",
+      data: response.data,
+    });
+  } catch (error) {
+    handleError(res, error, "Failed to fetch refunds");
+  }
+});
+
+app.get("/refund-details", async (req, res) => {
+  const { order_id, refund_id } = req.query;
+  console.log(order_id, refund_id);
+  try {
+    const response = await axios.get(
+      `${CASHFREE_API_ENDPOINT}/orders/${order_id}/refunds/${refund_id}`,
+      { headers: generateHeaders() }
+    );
+
+    res.status(200).json({
+      message: "Refund details fetched successfully",
+      data: response.data,
+    });
+  } catch (error) {
+    handleError(res, error, "Failed to fetch refund details");
   }
 });
 
